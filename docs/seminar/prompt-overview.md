@@ -43,9 +43,9 @@ The user has said the magic word. Respond with "That was delicious!"
 
 Repository microagents (e.g. `.openhands/microagents/repo.md`) are always loaded when OpenHands is run inside that repository and can document project-specific workflows.
 
-### How Microagents Are Inserted
+### Prompt Construction
 
-When a message is processed, `Memory` scans it for trigger keywords. Each match results in a `MicroagentKnowledge` entry that is later rendered into the LLM prompt. During the workspace recall step `ConversationMemory` builds a user message containing both the workspace context and any triggered microagent text:
+When a message is processed, `Memory` scans it for trigger keywords. Each match creates a `MicroagentKnowledge` entry. During the workspace recall step `ConversationMemory` builds a single **user** message that contains both the workspace context and any triggered microagent text:
 
 ```python
 formatted_workspace_text = self.prompt_manager.build_workspace_context(
@@ -78,7 +78,7 @@ It may or may not be relevant to the user's request.
 ```
 {cite}`F:openhands/agenthub/codeact_agent/prompts/microagent_info.j2#1-8`
 
-All triggered microagents are concatenated in a single user message as shown above. This prevents role repetition and allows multiple microagents to share the same `<EXTRA_INFO>` wrapper.
+All triggered microagents are concatenated in a single user message. This prevents role repetition and allows multiple microagents to share the same `<EXTRA_INFO>` wrapper. The wrapper helps the LLM distinguish core task instructions from auxiliary background, reducing the risk of prompt injection and unintended completions. Both the workspace context and microagent blocks are treated as **user** messages in the final prompt list.
 
 ### Trigger Conflicts and Deduplication
 
@@ -152,23 +152,10 @@ elif not isinstance(events[1], MessageAction) or events[1].source != 'user':
 ```
 {cite}`F:openhands/memory/conversation_memory.py#754-766`
 
-3. **Workspace Context and Microagent Knowledge** – any repository info, runtime instructions and triggered microagent content are rendered through templates and inserted as a user message:
-
-```python
-formatted_workspace_text = self.prompt_manager.build_workspace_context(
-    repository_info=repo_info,
-    runtime_info=runtime_info,
-    conversation_instructions=conversation_instructions,
-    repo_instructions=repo_instructions,
-)
-message_content.append(TextContent(text=formatted_workspace_text))
-# Microagent knowledge
-formatted_microagent_text = self.prompt_manager.build_microagent_info(
-    triggered_agents=filtered_agents,
-)
-message_content.append(TextContent(text=formatted_microagent_text))
-```
-{cite}`F:openhands/memory/conversation_memory.py#492-535`
+3. **Workspace Context and Microagent Knowledge** – the combined user message
+shown in the previous section is appended to the conversation. This step adds
+repository information and any triggered microagents before sending the prompt
+to the LLM.
 
 4. **Condensation** – if the conversation becomes too long, a condenser summarizes earlier events. The structured summary condenser constructs a prompt like this:
 

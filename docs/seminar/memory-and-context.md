@@ -24,9 +24,10 @@ This ensures multi-step tasks can resume even after interruptions.
 ### Persistent vs Ephemeral Memory
 
 `save_to_session` writes the `State` dataclass to disk while
-`restore_from_session` reloads it when the session restarts. The history list is
-not pickled; it is reconstructed from the event stream and a fresh `View` is
-created for processing:
+`restore_from_session` reloads it when the session restarts.
+The raw `history` field in `State` stores a list of events.
+When preparing input for the LLM a transient `View` is built from these events.
+This view is not saved to disk&mdash;it is recomputed on demand whenever the event history changes:
 
 ```python
 def save_to_session(self, sid: str, file_store: FileStore, user_id: str | None) -> None:
@@ -92,6 +93,7 @@ response = self.llm.completion(
 {cite}`F:openhands/memory/condenser/impl/structured_summary_condenser.py#218-258`
 
 The result is inserted back into the history as an `AgentCondensationObservation`, effectively compressing past conversation into a short structured state summary.
+Condensation is lossy but structured &mdash; summaries capture intent and key actions, not raw logs, enabling effective task resumption without exceeding token budgets.
 
 ## Building the Prompt
 
@@ -175,4 +177,5 @@ The repository search shows no implementation of a vector store or external know
 ## Conclusion
 
 OpenHands manages multi-step tasks by tracking a structured event history, condensing older events into summaries when needed, and rebuilding the LLM prompt on each iteration. It does not rely on external vector stores but instead persists a lightweight state file that includes a condensed summary of past work. This approach allows the agent to work on complex software tasks across multiple iterations without exceeding context limits.
+By separating short-term view generation from long-term persistence, OpenHands ensures stateless, repeatable LLM prompts while maintaining continuity across iterations&mdash;a design that balances context-window constraints with scalability.
 

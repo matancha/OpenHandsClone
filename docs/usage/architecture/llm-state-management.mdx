@@ -1,0 +1,121 @@
+---
+title: Maintaining State Between LLM Calls
+---
+
+OpenHands tracks conversation context using a persistent **`State`** object. The controller updates this state on every step and serializes it between sessions so an agent can pause and resume without losing history or metrics.
+
+## Overview
+
+The `State` dataclass lives in `openhands/controller/state/state.py`. It records runtime information such as:
+
+- **Iterations** – global and local counters for the task
+- **Agent state** – current `AgentState` (running, paused, etc.)
+- **History** – a list of `Event` objects representing actions and observations
+- **Metrics** – token usage and cost, tracked with a `Metrics` instance
+- **Session identifiers** – `session_id`, `start_id`, `end_id` used to save and load sessions
+
+```python
+@dataclass
+class State:
+    session_id: str = ''
+    iteration: int = 0
+    local_iteration: int = 0
+    max_iterations: int = 100
+    history: list[Event] = field(default_factory=list)
+    agent_state: AgentState = AgentState.LOADING
+    metrics: Metrics = field(default_factory=Metrics)
+```
+【F:openhands/controller/state/state.py†L77-L97】
+
+The history list grows as events flow through the system. The `view` property turns this list into a cached `View` object so message lookup remains efficient:
+
+```python
+@property
+def view(self) -> View:
+    history_checksum = len(self.history)
+    old = getattr(self, '_history_checksum', -1)
+    if history_checksum != old:
+        self._history_checksum = history_checksum
+        self._view = View.from_events(self.history)
+    return self._view
+```
+【F:openhands/controller/state/state.py†L226-L238】
+
+## Session Persistence
+
+Before shutdown the main loop saves state to a session file:
+
+```python
+if config.file_store and config.file_store != 'memory':
+    end_state = controller.get_state()
+    end_state.save_to_session(
+        event_stream.sid, event_stream.file_store, event_stream.user_id
+    )
+```
+【F:openhands/core/main.py†L208-L218】
+
+`save_to_session` pickles the dataclass and writes it to the `FileStore`:
+
+```python
+def save_to_session(self, sid: str, file_store: FileStore, user_id: str | None) -> None:
+    pickled = pickle.dumps(self)
+    encoded = base64.b64encode(pickled).decode('utf-8')
+    file_store.write(get_conversation_agent_state_filename(sid, user_id), encoded)
+```
+【F:openhands/controller/state/state.py†L107-L116】
+
+On startup `setup_agent` attempts to restore the last session:
+
+```python
+initial_state = State.restore_from_session(
+    event_stream.sid, event_stream.file_store
+)
+```
+【F:openhands/core/setup.py†L196-L203】
+
+`restore_from_session` reverses the process and resets the agent state to `LOADING` so the controller can replay events:
+
+```python
+encoded = file_store.read(get_conversation_agent_state_filename(sid, user_id))
+state = pickle.loads(base64.b64decode(encoded))
+if state.agent_state in RESUMABLE_STATES:
+    state.resume_state = state.agent_state
+state.agent_state = AgentState.LOADING
+```
+【F:openhands/controller/state/state.py†L130-L168】
+
+## Controller Updates
+
+`AgentController` increments iteration counters before each step and stores metrics afterwards:
+
+```python
+def update_state_before_step(self) -> None:
+    self.state.iteration += 1
+    self.state.local_iteration += 1
+
+async def update_state_after_step(self) -> None:
+    self.state.local_metrics = copy.deepcopy(self.agent.llm.metrics)
+```
+【F:openhands/controller/agent_controller.py†L260-L266】
+
+Incoming events are appended to the history inside `_on_event`:
+
+```python
+if self.agent_history_filter.include(event):
+    self.state.history.append(event)
+```
+【F:openhands/controller/agent_controller.py†L414-L418】
+
+After processing an action the controller updates metrics and logs the event:
+
+```python
+self.event_stream.add_event(action, action._source)
+await self.update_state_after_step()
+```
+【F:openhands/controller/agent_controller.py†L895-L897】
+
+These updates ensure that every LLM call modifies the state in a consistent way. Because the state is persisted between runs, the agent can resume from the exact point it left off.
+
+## Summary
+
+OpenHands relies on the `State` dataclass and the controller loop to maintain context across multiple LLM interactions. Events are stored in `history`, metrics and iteration counts are updated on each step, and sessions can be saved and restored using helper methods. This design allows conversations to continue even after interruptions or delegate handoffs.

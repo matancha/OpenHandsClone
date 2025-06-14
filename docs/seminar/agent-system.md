@@ -43,7 +43,7 @@ async def start_delegate(self, action: AgentDelegateAction) -> None:
         is_delegate=True,
         headless_mode=self.headless_mode,
     )
-```
+{cite}`F:openhands/controller/agent_controller.py#670-719`
 
 The docstring inside this method clarifies the terminology of *tasks* and *subtasks* and states that OpenHands is a *multi‑agentic system*.
 
@@ -72,6 +72,7 @@ and finish
 
 -- TASK ENDS (SUBTASK 0 ENDS) --
 ```
+{cite}`F:openhands/agenthub/README.md#95-142`
 
 In this scenario the default `CodeActAgent` delegates to a `BrowsingAgent` to fetch information, then resumes control after the delegate finishes. Iteration counters are shared globally while each subtask maintains its own local iteration.
 
@@ -100,6 +101,7 @@ Tools for shell commands, IPython execution, file editing and browsing are injec
         self.conversation_memory = ConversationMemory(self.config, self.prompt_manager)
         self.condenser = Condenser.from_config(self.config.condenser)
 ```
+{cite}`F:openhands/agenthub/codeact_agent/codeact_agent.py#64-90`
 
 The agent’s `step` method sends the condensed history to the LLM, receives a response and queues resulting actions:
 
@@ -135,6 +137,7 @@ The agent’s `step` method sends the condensed history to the LLM, receives a r
             self.pending_actions.append(action)
         return self.pending_actions.popleft()
 ```
+{cite}`F:openhands/agenthub/codeact_agent/codeact_agent.py#160-196`
 
 Delegation is triggered by emitting an `AgentDelegateAction`. The parent controller then launches a new agent with its own LLM configuration.
 
@@ -185,6 +188,7 @@ def load_microagents_from_dir(
     )
     return repo_agents, knowledge_agents
 ```
+{cite}`F:openhands/microagent/microagent.py#239-285`
 
 The public microagents repository outlines the two sources of microagents (shareable agents and repository instructions):
 
@@ -208,6 +212,7 @@ OpenHands/microagents/
 Each repository can have its own instructions in `.openhands/microagents/repo.md`.
 These instructions are automatically loaded when working with that repository.
 ```
+{cite}`F:microagents/README.md#1-32`
 
 During setup, `create_memory` loads microagents from the selected repository and stores them in `Memory` for recall later:
 
@@ -232,6 +237,7 @@ During setup, `create_memory` loads microagents from the selected repository and
         if selected_repository and repo_directory:
             memory.set_repository_info(selected_repository, repo_directory)
 ```
+{cite}`F:openhands/core/setup.py#148-170`
 
 ## Session and State Tracking
 
@@ -261,6 +267,7 @@ class State:
     start_id: int = -1
     end_id: int = -1
 ```
+{cite}`F:openhands/controller/state/state.py#44-84`
 
 The current state is saved to disk between runs, ensuring that tasks can be resumed with the full history intact.
 

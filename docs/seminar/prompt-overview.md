@@ -43,6 +43,73 @@ The user has said the magic word. Respond with "That was delicious!"
 
 Repository microagents (e.g. `.openhands/microagents/repo.md`) are always loaded when OpenHands is run inside that repository and can document project-specific workflows.
 
+### How Microagents Are Inserted
+
+When a message is processed, `Memory` scans it for trigger keywords. Each match results in a `MicroagentKnowledge` entry that is later rendered into the LLM prompt. During the workspace recall step `ConversationMemory` builds a user message containing both the workspace context and any triggered microagent text:
+
+```python
+formatted_workspace_text = self.prompt_manager.build_workspace_context(
+    repository_info=repo_info,
+    runtime_info=runtime_info,
+    conversation_instructions=conversation_instructions,
+    repo_instructions=repo_instructions,
+)
+message_content.append(TextContent(text=formatted_workspace_text))
+if has_microagent_knowledge:
+    formatted_microagent_text = self.prompt_manager.build_microagent_info(
+        triggered_agents=filtered_agents,
+    )
+    message_content.append(TextContent(text=formatted_microagent_text))
+message = Message(role='user', content=message_content)
+```
+{cite}`F:openhands/memory/conversation_memory.py#488-535`
+
+The microagent content itself is inserted verbatim using the `microagent_info.j2` template which wraps each block in `<EXTRA_INFO>` tags:
+
+```jinja
+{% for agent_info in triggered_agents %}
+<EXTRA_INFO>
+The following information has been included based on a keyword match for "{{ agent_info.trigger }}".
+It may or may not be relevant to the user's request.
+
+{{ agent_info.content }}
+</EXTRA_INFO>
+{% endfor %}
+```
+{cite}`F:openhands/agenthub/codeact_agent/prompts/microagent_info.j2#1-8`
+
+All triggered microagents are concatenated in a single user message as shown above. This prevents role repetition and allows multiple microagents to share the same `<EXTRA_INFO>` wrapper.
+
+### Trigger Conflicts and Deduplication
+
+If several microagents match the same prompt, `Memory` collects them all without ranking:
+
+```python
+for name, microagent in self.knowledge_microagents.items():
+    trigger = microagent.match_trigger(query)
+    if trigger:
+        recalled_content.append(
+            MicroagentKnowledge(name=microagent.name, trigger=trigger, content=microagent.content)
+        )
+```
+{cite}`F:openhands/memory/memory.py#215-241`
+
+Before insertion, `ConversationMemory` filters out microagents that have already appeared earlier in the conversation to avoid bloat:
+
+```python
+def _filter_agents_in_microagent_obs(self, obs, current_index, events):
+    if obs.recall_type != RecallType.KNOWLEDGE:
+        return obs.microagent_knowledge
+    filtered_agents = []
+    for agent in obs.microagent_knowledge:
+        if not self._has_agent_in_earlier_events(agent.name, current_index, events):
+            filtered_agents.append(agent)
+    return filtered_agents
+```
+{cite}`F:openhands/memory/conversation_memory.py#614-638`
+
+This means overlapping triggers simply result in multiple blocks in the same message. There is no scoring system; deduplication only ensures the same microagent isn't injected twice.
+
 ## Breaking Down Tasks
 
 OpenHands can delegate subtasks to other agents. In the architecture notes this is described as a multi‑agent system where a task may consist of multiple `subtasks`, each executed by an agent:
@@ -116,6 +183,27 @@ response = self.llm.completion(...)
 The result is returned as a `CondensationAction` which updates the event history.
 
 After these steps, the final list of `Message` objects is sent to the LLM for completion.
+
+## Persistent vs Transient Memory
+
+OpenHands stores long‑term state in the `State` dataclass. When a session ends, `State.save_to_session` pickles the object and clears the message history so only essential metadata persists. Later `restore_from_session` rebuilds the state and reloads events from disk:
+
+```python
+@staticmethod
+def restore_from_session(sid: str, file_store: FileStore, user_id: str | None = None) -> 'State':
+    encoded = file_store.read(get_conversation_agent_state_filename(sid, user_id))
+    pickled = base64.b64decode(encoded)
+    state = pickle.loads(pickled)
+    if state.agent_state in RESUMABLE_STATES:
+        state.resume_state = state.agent_state
+    else:
+        state.resume_state = None
+    state.agent_state = AgentState.LOADING
+    return state
+```
+{cite}`F:openhands/controller/state/state.py#120-168`
+
+The event history itself is transient. Each call to the LLM rebuilds the prompt from the condensed history and freshly retrieved microagents, so only the summary of prior work is remembered. This separation keeps the persistent session small while still providing the LLM with relevant context.
 
 ## Summary
 

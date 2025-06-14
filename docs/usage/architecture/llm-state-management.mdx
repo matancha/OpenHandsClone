@@ -1,0 +1,105 @@
+---
+title: Maintaining State Between LLM Calls
+---
+
+OpenHands keeps a detailed `State` object for each session. The state tracks
+conversation history, iteration counts and metrics so that agents can resume
+seamlessly after every model call or even after a restart.
+
+## The `State` Dataclass
+
+The main fields are defined in `openhands/controller/state/state.py`:
+
+```python
+@dataclass
+class State:
+    iteration: int = 0
+    local_iteration: int = 0
+    max_iterations: int = 100
+    confirmation_mode: bool = False
+    history: list[Event] = field(default_factory=list)
+    agent_state: AgentState = AgentState.LOADING
+    metrics: Metrics = field(default_factory=Metrics)
+    local_metrics: Metrics = field(default_factory=Metrics)
+    delegate_level: int = 0
+    start_id: int = -1
+    end_id: int = -1
+```
+【F:openhands/controller/state/state.py†L63-L99】
+
+Each action or observation is appended to `history` so the next prompt can be
+built from prior context.
+
+## Recording History
+
+`AgentController` listens for new events from the `EventStream`. When a relevant
+event arrives it is stored in the state's history:
+
+```python
+# if the event is not filtered out, add it to the history
+if self.agent_history_filter.include(event):
+    self.state.history.append(event)
+```
+【F:openhands/controller/agent_controller.py†L411-L417】
+
+The history is later condensed into a `View` for prompt generation. To avoid
+rebuilding this view unnecessarily, `State.view` caches the result until the
+history length changes:
+
+```python
+@property
+def view(self) -> View:
+    history_checksum = len(self.history)
+    old_history_checksum = getattr(self, '_history_checksum', -1)
+    if history_checksum != old_history_checksum:
+        self._history_checksum = history_checksum
+        self._view = View.from_events(self.history)
+    return self._view
+```
+【F:openhands/controller/state/state.py†L226-L239】
+
+## Updating Iterations and Metrics
+
+Before each LLM call, `AgentController` increments the iteration counters. After
+processing the response it copies cost metrics from the `LLM` wrapper:
+
+```python
+def update_state_before_step(self) -> None:
+    self.state.iteration += 1
+    self.state.local_iteration += 1
+
+async def update_state_after_step(self) -> None:
+    self.state.local_metrics = copy.deepcopy(self.agent.llm.metrics)
+```
+【F:openhands/controller/agent_controller.py†L260-L266】
+
+## Persisting Sessions
+
+States survive process restarts through `save_to_session` and
+`restore_from_session`. The CLI and core loop call these helpers when shutting
+down or resuming a session:
+
+```python
+end_state = controller.get_state()
+end_state.save_to_session(event_stream.sid, event_stream.file_store, event_stream.user_id)
+```
+【F:openhands/core/main.py†L209-L215】
+
+```python
+initial_state = State.restore_from_session(event_stream.sid, event_stream.file_store)
+```
+【F:openhands/core/setup.py†L198-L203】
+
+`save_to_session` serializes the dataclass via `pickle` and writes it to the
+configured file store. `restore_from_session` reverses this process and resets
+the agent to `LOADING` state before it resumes execution.
+
+## Putting It Together
+
+1. Events from the runtime and agent are appended to `state.history`.
+2. Before each call, iteration counters are updated and a view of the history is
+   built if needed.
+3. After the LLM responds, metrics are merged and the state can be persisted.
+
+This design ensures that even long‑running conversations keep the necessary
+context and can be resumed safely between LLM calls.

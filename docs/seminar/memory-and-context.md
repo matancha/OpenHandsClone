@@ -27,6 +27,7 @@ This ensures multi-step tasks can resume even after interruptions.
 `restore_from_session` reloads it when the session restarts.
 The raw `history` field in `State` stores a list of events.
 When preparing input for the LLM a transient `View` is built from these events.
+The `View` class transforms raw events into `Message` objects, applying filters and context window limits to create a prompt-ready sequence.
 This view is not saved to disk&mdash;it is recomputed on demand whenever the event history changes:
 
 ```python
@@ -128,7 +129,7 @@ kept_events = self._apply_conversation_window(current_view.events)
 ```
 {cite}`F:openhands/controller/agent_controller.py#1164-1167`
 
-No intermediate LLM responses are cached beyond optional prompt caching.
+OpenHands includes an optional prompt caching mechanism for supported models, but by default completions are recomputed each iteration and intermediate LLM responses are not reused.
 
 ### Delegation and Memory Sharing
 
@@ -179,3 +180,4 @@ The repository search shows no implementation of a vector store or external know
 OpenHands manages multi-step tasks by tracking a structured event history, condensing older events into summaries when needed, and rebuilding the LLM prompt on each iteration. It does not rely on external vector stores but instead persists a lightweight state file that includes a condensed summary of past work. This approach allows the agent to work on complex software tasks across multiple iterations without exceeding context limits.
 By separating short-term view generation from long-term persistence, OpenHands ensures stateless, repeatable LLM prompts while maintaining continuity across iterations&mdash;a design that balances context-window constraints with scalability.
 
+OpenHands's approach to memory emphasizes control, not accumulation. Instead of accumulating long conversations, it builds short, structured prompts per step, using event history and LLM-generated summaries to maintain coherence. This reflects a broader design philosophy in modern LLM systems \u2014 one that prioritizes modular, resumable, context-aware operation over traditional session memory.

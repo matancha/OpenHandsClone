@@ -173,7 +173,35 @@ self.event_stream.add_event(obs, EventSource.AGENT)
 
 ## No Vector Store or Scratchpad
 
-The repository search shows no implementation of a vector store or external knowledge base. Memory is derived solely from the event history and the optional microagent files. Summaries are produced by the LLM itself via the condenser; there is no retrieval from a vector database or long term scratchpad beyond the saved `State` pickles.
+The repository search shows no implementation of a vector store or external knowledge base. Memory is derived solely from the event history and the optional microagent files. Summaries are produced by the LLM itself via the condenser; there is no retrieval from a vector database or long‑term scratchpad beyond the saved `State` pickles.
+
+## Memory Design Commentary
+
+OpenHands’s memory design favors structured determinism over accumulation. By storing events and rebuilding the prompt afresh each iteration, it keeps agent decisions auditable and reproducible—a requirement for systems that modify source code. The lossy but structured condensation strikes a balance between coherence and context-window constraints.
+
+### Design Goals
+
+- **Reproducibility** – every prompt is rebuilt deterministically from the event history.
+- **Modularity** – delegation shares a single event stream so subagents inherit context without duplication.
+- **Context Window Management** – condensation summarises older events to avoid overflow.
+- **Minimal Disk Footprint** – persisted state consists only of pickled events and summaries, not a heavy vector database.
+
+### Trade-Offs
+
+- **Pros**
+  - Stateless prompting makes debugging and repeatability easier.
+  - Summaries keep the prompt short and focused.
+  - Delegation reuses existing infrastructure; no extra serialization is required.
+- **Cons**
+  - Condensation is lossy, so fine-grained details can be lost.
+  - Without semantic memory, the agent cannot easily reuse solutions from prior tasks.
+  - No dedicated scratchpad means plans must be reconstructed from history on each iteration.
+
+### Future Extensions
+
+- A lightweight vector store of useful completions could aid code reuse across sessions.
+- Introducing a structured task plan or scratchpad might help large projects retain context without bloating prompts.
+- Semantic indexing of past events could assist in finding similar tasks without manual search.
 
 ## Conclusion
 

@@ -45,6 +45,7 @@ async def start_delegate(self, action: AgentDelegateAction) -> None:
     )
 ```
 
+
 The docstring inside this method clarifies the terminology of *tasks* and *subtasks* and states that OpenHands is a *multi‑agentic system*.
 
 ### Example from Documentation

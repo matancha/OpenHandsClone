@@ -1,0 +1,82 @@
+---
+title: LLM Architecture Overview
+---
+
+This page describes how OpenHands organizes its code around Large Language Model (LLM) interactions. It gives a tour of the most important modules and how they work together when an agent talks to the model.
+
+## Key Modules
+
+- **`openhands.llm`** – Houses the `LLM` class and helpers such as retries, metrics and function-call conversion. It defines how API requests are built, sent and logged.
+- **`openhands.core.config.llm_config`** – Defines `LLMConfig`, a Pydantic model storing settings like API keys, timeouts and retry behaviour.
+- **`openhands.controller`** – Implements `AgentController` and the event-driven control loop that drives LLM calls.
+- **`openhands.agenthub`** – Contains ready‑to‑use agent classes (for example `CodeActAgent`) along with their prompts and tool definitions.
+- **`openhands.events`** – Declares the `EventStream` plus `Action` and `Observation` types used to coordinate each step.
+
+These components live under `openhands/`. Their roles are described in more detail below.
+
+## High‑Level Flow
+
+A typical run is started via `run_agent_until_done` in `openhands/core/loop.py`:
+
+```python
+while controller.state.agent_state not in end_states:
+    await controller.step(runtime, memory)
+```
+【F:openhands/core/loop.py†L12-L21】
+
+`AgentController.step` gathers messages for the LLM, sends them using `LLM.completion`, parses the response and publishes resulting actions to the `EventStream` for the runtime to consume.
+
+```python
+response = await self.agent.send_messages(messages, llm, stream)
+actions = self.agent.parse_response(response)
+for action in actions:
+    await self.event_stream.publish(Event(ActionSource.AGENT, action))
+```
+【F:openhands/controller/agent_controller.py†L476-L506】
+
+Each iteration updates the `State` object which tracks metrics and conversation history.
+
+## The `LLM` Class
+
+`LLM` is a thin wrapper around LiteLLM. It injects retry logic via `RetryMixin` and exposes a `completion` method. Messages are passed in as Pydantic `Message` objects and serialized before the API call. Responses are logged and post‑processed to collect token usage and handle tool‑call results.
+
+```python
+resp: ModelResponse = self._completion_unwrapped(*args, **kwargs)
+latency = time.time() - start_time
+self.metrics.add_response_latency(latency, response_id)
+```
+【F:openhands/llm/llm.py†L216-L246】
+
+If the model lacks native tool calling, helper functions in `fn_call_converter.py` rewrite prompts to emulate it. The class also records completion cost using the information returned by the model.
+
+## Agent Prompts
+
+Each agent holds a `PromptManager` that loads Jinja2 templates from its `prompts/` directory. Templates specify the system message and any context to send to the LLM. When the controller invokes `agent.send_messages`, these templates are rendered and combined with the current conversation memory to produce the final message list.
+
+```python
+self._prompt_manager = PromptManager(
+    prompt_dir=os.path.join(os.path.dirname(__file__), 'prompts'),
+)
+```
+【F:openhands/agenthub/codeact_agent/codeact_agent.py†L107-L111】
+
+## Event‑Driven Architecture
+
+All modules communicate through `EventStream`. Actions produced by the agent are executed by the runtime and generate observations. Both are stored in the `State` history and feed back into the next prompt.
+
+```python
+class State:
+    history: list[Event] = field(default_factory=list)
+```
+【F:openhands/controller/state/state.py†L62-L99】
+
+This design decouples LLM usage from execution logic—agents only reason about events, while the runtime handles side effects.
+
+## Putting It Together
+
+1. **Initialization** – `AgentController` is created with an agent instance and an `EventStream`. It loads `LLMConfig` from the configuration file.
+2. **Main Loop** – `run_agent_until_done` repeatedly calls `controller.step`, which builds prompts and sends them to the LLM.
+3. **Action Execution** – Parsed actions are published to the event stream. The runtime processes them and posts observations.
+4. **State Update** – The controller records metrics and updates `State` with new events. The loop continues until a terminal state is reached.
+
+This overview should help readers navigate the repository and understand where LLM related logic lives.
